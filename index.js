@@ -1,5 +1,5 @@
-import express from "express";
-import fetch from "node-fetch";
+const express = require("express");
+const fetch = require("node-fetch");
 
 const app = express();
 
@@ -11,12 +11,15 @@ app.get("/", async (req, res) => {
         const response = await fetch(target);
         const data = await response.text();
 
-        res.setHeader("Content-Type": "application/json");
+        res.setHeader("Content-Type", "application/json");
         res.send(data);
 
     } catch (err) {
+        console.error(err);
         res.status(500).json({ error: err.message });
     }
 });
 
-app.listen(3000, () => console.log("Server running on port 3000"));
+app.listen(3000, () => {
+    console.log("Server running on port 3000");
+});
