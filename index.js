@@ -7,7 +7,7 @@ const app = express();
 // --------------------------------------------
 // 1. MONGO CONNECTION
 // --------------------------------------------
-const MONGO_URI = process.env.MONGO_URI;
+const MONGO_URI = "mongodb+srv://amitkr545545_db_user:05jVaRYWKUvlyGK2@cluster0.ggemqlz.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0";
 
 mongoose.connect(MONGO_URI, {
     useNewUrlParser: true,
