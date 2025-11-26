@@ -1,31 +1,43 @@
 const express = require("express");
 const fs = require("fs");
 const fetch = require("node-fetch");
+const path = require("path");
 
 const app = express();
-const TASK_DIR = "/home/container/tasks";
 
-if (!fs.existsSync(TASK_DIR)) fs.mkdirSync(TASK_DIR);
+// Writable task directory for Railway
+const TASK_DIR = path.join(__dirname, "tasks");
 
-// Generate random task id
-function newTaskID() {
-    return Date.now().toString(36) + Math.random().toString(36).substr(2, 8);
+// Create tasks folder if missing
+if (!fs.existsSync(TASK_DIR)) {
+    fs.mkdirSync(TASK_DIR, { recursive: true });
 }
 
-// -------------------------------
+// Generate unique task IDs
+function newTaskID() {
+    return (
+        Date.now().toString(36) +
+        Math.random().toString(36).substring(2, 10)
+    );
+}
+
+// ---------------------------------------
 // 1) START ENDPOINT
-// -------------------------------
+// ---------------------------------------
 app.get("/start", (req, res) => {
     const { main_url, meme_url } = req.query;
 
     if (!main_url || !meme_url) {
-        return res.json({ status: "error", msg: "main_url & meme_url required" });
+        return res.json({
+            status: "error",
+            msg: "main_url and meme_url required"
+        });
     }
 
     const id = newTaskID();
-    const taskFile = `${TASK_DIR}/${id}.json`;
+    const filePath = path.join(TASK_DIR, `${id}.json`);
 
-    const taskData = {
+    const task = {
         task_id: id,
         main_url,
         meme_url,
@@ -34,7 +46,7 @@ app.get("/start", (req, res) => {
         error: null
     };
 
-    fs.writeFileSync(taskFile, JSON.stringify(taskData, null, 2));
+    fs.writeFileSync(filePath, JSON.stringify(task, null, 2));
 
     return res.json({
         task_id: id,
@@ -42,60 +54,68 @@ app.get("/start", (req, res) => {
     });
 });
 
-// -------------------------------
+// ---------------------------------------
 // 2) STATUS ENDPOINT
-// -------------------------------
+// ---------------------------------------
 app.get("/status", (req, res) => {
     const { task_id } = req.query;
 
-    if (!task_id) return res.json({ status: "error", msg: "task_id required" });
+    if (!task_id) {
+        return res.json({ status: "error", msg: "task_id required" });
+    }
 
-    const file = `${TASK_DIR}/${task_id}.json`;
-    if (!fs.existsSync(file)) {
+    const filePath = path.join(TASK_DIR, `${task_id}.json`);
+
+    if (!fs.existsSync(filePath)) {
         return res.json({ status: "error", msg: "invalid task_id" });
     }
 
-    const task = JSON.parse(fs.readFileSync(file));
-
-    return res.json(task);
+    const data = JSON.parse(fs.readFileSync(filePath));
+    return res.json(data);
 });
 
-// -------------------------------
+// ---------------------------------------
 // 3) BACKGROUND WORKER
-// -------------------------------
+// ---------------------------------------
 setInterval(async () => {
-    const tasks = fs.readdirSync(TASK_DIR);
+    const allTasks = fs.readdirSync(TASK_DIR);
 
-    for (const file of tasks) {
-        const path = `${TASK_DIR}/${file}`;
-        let data = JSON.parse(fs.readFileSync(path));
+    for (const file of allTasks) {
+        const filePath = path.join(TASK_DIR, file);
+        let task = JSON.parse(fs.readFileSync(filePath));
 
-        if (data.status !== "queued") continue;
+        if (task.status !== "queued") continue;
 
-        // Mark as processing
-        data.status = "processing";
-        fs.writeFileSync(path, JSON.stringify(data, null, 2));
+        // Mark task as processing
+        task.status = "processing";
+        fs.writeFileSync(filePath, JSON.stringify(task, null, 2));
 
         try {
-            // Call MAIN API (your port 7782 server)
-            const url =
-                `http://src.is-normal.site:7782/api.php?main_url=${encodeURIComponent(data.main_url)}&meme_url=${encodeURIComponent(data.meme_url)}`;
+            // Build MAIN API request URL
+            const mainApiUrl =
+                `http://src.is-normal.site:7782/api.php?main_url=${encodeURIComponent(task.main_url)}&meme_url=${encodeURIComponent(task.meme_url)}`;
 
-            const response = await fetch(url, { timeout: 0 }); // no timeout
-            const json = await response.json();
+            // Fetch WITHOUT timeout
+            const resp = await fetch(mainApiUrl, { timeout: 0 });
+            const json = await resp.json();
 
-            // Save response
-            data.status = "done";
-            data.response = json;
-            fs.writeFileSync(path, JSON.stringify(data, null, 2));
+            // Save success result
+            task.status = "done";
+            task.response = json;
+            fs.writeFileSync(filePath, JSON.stringify(task, null, 2));
 
-        } catch (err) {
-            data.status = "failed";
-            data.error = err.message;
-            fs.writeFileSync(path, JSON.stringify(data, null, 2));
+        } catch (e) {
+            // Error handling
+            task.status = "failed";
+            task.error = e.message;
+            fs.writeFileSync(filePath, JSON.stringify(task, null, 2));
         }
     }
-}, 3000); // check every 3 sec
+}, 3000); // checks tasks every 3 sec
 
-// -------------------------------
-app.listen(3000, () => console.log("Task API Started"));
+// ---------------------------------------
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+    console.log("Task API running on port", PORT);
+});
