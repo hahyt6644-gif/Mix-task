@@ -1,20 +1,36 @@
 const express = require("express");
-const fs = require("fs");
 const fetch = require("node-fetch");
-const path = require("path");
+const mongoose = require("mongoose");
 
 const app = express();
 
-// ------------------------------
-// Correct, Railway-safe tasks folder
-// ------------------------------
-const TASK_DIR = path.join(__dirname, "tasks");
+// --------------------------------------------
+// 1. MONGO CONNECTION
+// --------------------------------------------
+const MONGO_URI = process.env.MONGO_URI;
 
-if (!fs.existsSync(TASK_DIR)) {
-    fs.mkdirSync(TASK_DIR, { recursive: true });
-}
+mongoose.connect(MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+})
+.then(() => console.log("MongoDB Connected"))
+.catch(err => console.error("MongoDB Error:", err));
 
-// Generate task ID
+// --------------------------------------------
+// 2. MONGO SCHEMA
+// --------------------------------------------
+const TaskSchema = new mongoose.Schema({
+    task_id: String,
+    main_url: String,
+    meme_url: String,
+    status: String,       // queued, processing, done, failed
+    response: Object,     // final answer from main API
+    error: String
+});
+
+const Task = mongoose.model("Task", TaskSchema);
+
+// Helper: Create unique task ID
 function newTaskID() {
     return (
         Date.now().toString(36) +
@@ -22,10 +38,10 @@ function newTaskID() {
     );
 }
 
-// ------------------------------
-// /start → Create new task
-// ------------------------------
-app.get("/start", (req, res) => {
+// --------------------------------------------
+// 3. START ENDPOINT  → creates task
+// --------------------------------------------
+app.get("/start", async (req, res) => {
     const { main_url, meme_url } = req.query;
 
     if (!main_url || !meme_url) {
@@ -33,85 +49,67 @@ app.get("/start", (req, res) => {
     }
 
     const id = newTaskID();
-    const fpath = path.join(TASK_DIR, `${id}.json`);
 
-    const task = {
+    await Task.create({
         task_id: id,
         main_url,
         meme_url,
         status: "queued",
         response: null,
         error: null
-    };
-
-    fs.writeFileSync(fpath, JSON.stringify(task, null, 2));
+    });
 
     return res.json({ task_id: id, status: "queued" });
 });
 
-// ------------------------------
-// /status → Check task status
-// ------------------------------
-app.get("/status", (req, res) => {
+// --------------------------------------------
+// 4. STATUS ENDPOINT  → shows result
+// --------------------------------------------
+app.get("/status", async (req, res) => {
     const { task_id } = req.query;
 
-    if (!task_id) {
-        return res.json({ status: "error", msg: "task_id required" });
-    }
+    if (!task_id) return res.json({ status: "error", msg: "task_id required" });
 
-    const fpath = path.join(TASK_DIR, `${task_id}.json`);
+    const task = await Task.findOne({ task_id });
 
-    if (!fs.existsSync(fpath)) {
-        return res.json({ status: "error", msg: "invalid task_id" });
-    }
+    if (!task) return res.json({ status: "error", msg: "invalid task_id" });
 
-    const data = JSON.parse(fs.readFileSync(fpath));
-    return res.json(data);
+    return res.json(task);
 });
 
-// ------------------------------
-// Background Worker → every 3 sec
-// ------------------------------
+// --------------------------------------------
+// 5. BACKGROUND WORKER (every 3 sec)
+// --------------------------------------------
 setInterval(async () => {
-    const files = fs.readdirSync(TASK_DIR);
+    const queuedTasks = await Task.find({ status: "queued" });
 
-    for (const file of files) {
-        const fpath = path.join(TASK_DIR, file);
-        let data = JSON.parse(fs.readFileSync(fpath));
-
-        if (data.status !== "queued") continue;
-
-        // Mark as processing
-        data.status = "processing";
-        fs.writeFileSync(fpath, JSON.stringify(data, null, 2));
+    for (const job of queuedTasks) {
+        job.status = "processing";
+        await job.save();
 
         try {
-            // Build main API URL
-            const url =
-                `http://src.is-normal.site:7782/api.php?main_url=${encodeURIComponent(data.main_url)}&meme_url=${encodeURIComponent(data.meme_url)}`;
+            const apiURL =
+                `http://src.is-normal.site:7782/api.php?main_url=${encodeURIComponent(job.main_url)}&meme_url=${encodeURIComponent(job.meme_url)}`;
 
-            // Wait unlimited time (no timeout)
-            const resp = await fetch(url, { timeout: 0 });
+            const resp = await fetch(apiURL, { timeout: 0 });
             const json = await resp.json();
 
-            // Save success response
-            data.status = "done";
-            data.response = json;
-            fs.writeFileSync(fpath, JSON.stringify(data, null, 2));
+            job.status = "done";
+            job.response = json;
+            await job.save();
 
         } catch (err) {
-            data.status = "failed";
-            data.error = err.message;
-            fs.writeFileSync(fpath, JSON.stringify(data, null, 2));
+            job.status = "failed";
+            job.error = err.message;
+            await job.save();
         }
     }
 }, 3000);
 
-// ------------------------------
-// Must use Railway's dynamic port
-// ------------------------------
+// --------------------------------------------
+// 6. START SERVER (Railway-safe)
+// --------------------------------------------
 const PORT = process.env.PORT || 3000;
-
 app.listen(PORT, "0.0.0.0", () => {
     console.log("Task API running on port", PORT);
 });
